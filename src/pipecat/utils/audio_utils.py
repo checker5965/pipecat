@@ -178,11 +178,12 @@ async def taper_audio_frame(
     )
 
     # Find the next word boundary
+    word_boundary = None
     if params.taper_after_word_boundary:
         word_boundary = _find_word_boundary(audio_np, sample_rate, 0)
 
     # First, output the audio up to the word boundary at full volume if it exists
-    if word_boundary > 0:
+    if word_boundary is not None and word_boundary > 0:
         yield OutputAudioRawFrame(
             audio=audio_np[:word_boundary].tobytes(),
             sample_rate=sample_rate,
@@ -191,7 +192,7 @@ async def taper_audio_frame(
         await asyncio.sleep(word_boundary / sample_rate)
 
     # Then taper the remaining audio
-    if word_boundary > 0:
+    if word_boundary is not None and word_boundary > 0:
         remaining_audio = audio_np[word_boundary:]
     else:
         remaining_audio = audio_np
@@ -217,7 +218,7 @@ async def taper_audio_frame(
         current_volume = np.mean(np.abs(chunk))
         if not np.isnan(current_volume):
             logger.debug(
-                f"Step {step}/{total_steps}: volume_scale={volume_scale:.3f}, current_volume={current_volume:.1f}"
+                f"Step {step}/{total_steps}: volume_scale={volume_scale:.3f}, current_volume={current_volume:.3f}"
             )
 
         # Create a new audio frame with the tapered chunk
