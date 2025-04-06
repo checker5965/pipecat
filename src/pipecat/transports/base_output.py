@@ -565,5 +565,7 @@ class BaseOutputTransport(FrameProcessor):
         logger.debug(
             f"Pushing tapered frames: {self._params.tapering_period_ms}ms, {self._params.tapering_steps} steps, {self._params.tapering_decay_factor} decay"
         )
+
+        logger.debug(f"Frame duration: {len(frame.audio) / frame.sample_rate} seconds")
         async for tapered_frame in taper_audio_frame(frame, self._params):
             await self._sink_queue.put(tapered_frame)
