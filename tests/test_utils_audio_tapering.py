@@ -4,7 +4,10 @@ This module contains unit tests for the audio tapering system, including
 word boundary detection, volume reduction, and edge case handling.
 """
 
+import time
+
 import numpy as np
+import psutil
 import pytest
 
 from pipecat.frames.frames import OutputAudioRawFrame
@@ -397,3 +400,140 @@ async def test_tapering_parameter_validation():
         )
         async for _ in taper_audio_frame(audio_frame, params):
             pass
+
+
+@pytest.mark.asyncio
+async def test_tapering_performance():
+    """Test performance characteristics of audio tapering."""
+    # Create a realistic audio frame (1 second of audio at 16kHz)
+    audio_data = np.full(16000, 20000, dtype=np.int16)
+    audio_bytes = audio_data.tobytes()
+    audio_frame = OutputAudioRawFrame(audio=audio_bytes, sample_rate=16000, num_channels=1)
+
+    # Create params with standard settings
+    params = TransportParams(
+        tapering_period_ms=200,
+        tapering_steps=10,
+        tapering_decay_factor=2.0,
+        taper_after_word_boundary=False,
+    )
+
+    # Measure memory before processing
+    process = psutil.Process()
+    initial_memory = process.memory_info().rss
+
+    # Time the processing
+    start_time = time.time()
+    tapered_frames = []
+    async for frame in taper_audio_frame(audio_frame, params):
+        tapered_frames.append(frame)
+    end_time = time.time()
+
+    # Calculate metrics
+    processing_time = end_time - start_time
+    final_memory = process.memory_info().rss
+    memory_used = final_memory - initial_memory
+    frames_per_second = len(tapered_frames) / processing_time
+
+    # Log performance metrics
+    print(f"\nPerformance Metrics:")
+    print(f"Processing time: {processing_time:.4f} seconds")
+    print(f"Memory used: {memory_used / 1024:.2f} KB")
+    print(f"Frames per second: {frames_per_second:.2f}")
+
+    # Assert performance requirements
+    assert processing_time < 0.25  # Should process in less than 250ms
+    assert memory_used < 1024 * 1024  # Should use less than 1MB of memory
+
+
+@pytest.mark.asyncio
+async def test_tapering_performance_under_load():
+    """Test performance under sustained load."""
+    # Create multiple audio frames
+    num_frames = 100
+    frames = []
+    for _ in range(num_frames):
+        audio_data = np.full(16000, 20000, dtype=np.int16)
+        audio_bytes = audio_data.tobytes()
+        frames.append(OutputAudioRawFrame(audio=audio_bytes, sample_rate=16000, num_channels=1))
+
+    params = TransportParams(
+        tapering_period_ms=200,
+        tapering_steps=10,
+        tapering_decay_factor=2.0,
+        taper_after_word_boundary=False,
+    )
+
+    # Measure memory before processing
+    process = psutil.Process()
+    initial_memory = process.memory_info().rss
+
+    # Process all frames and measure time
+    start_time = time.time()
+    all_tapered_frames = []
+    for frame in frames:
+        tapered_frames = []
+        async for tapered_frame in taper_audio_frame(frame, params):
+            tapered_frames.append(tapered_frame)
+        all_tapered_frames.extend(tapered_frames)
+    end_time = time.time()
+
+    # Calculate metrics
+    total_time = end_time - start_time
+    final_memory = process.memory_info().rss
+    memory_used = final_memory - initial_memory
+    average_time_per_frame = total_time / num_frames
+
+    # Log performance metrics
+    print(f"\nPerformance Under Load:")
+    print(f"Total processing time: {total_time:.4f} seconds")
+    print(f"Average time per frame: {average_time_per_frame:.4f} seconds")
+    print(f"Total memory used: {memory_used / 1024:.2f} KB")
+
+    # Assert performance requirements
+    assert average_time_per_frame < 0.25  # Should process each frame in less than 250ms
+    assert memory_used < 10 * 1024 * 1024  # Should use less than 10MB of memory for 100 frames
+
+
+@pytest.mark.asyncio
+async def test_tapering_performance_with_large_frames():
+    """Test performance with large audio frames."""
+    # Create a large audio frame (10 seconds of audio at 16kHz)
+    audio_data = np.full(160000, 20000, dtype=np.int16)
+    audio_bytes = audio_data.tobytes()
+    audio_frame = OutputAudioRawFrame(audio=audio_bytes, sample_rate=16000, num_channels=1)
+
+    params = TransportParams(
+        tapering_period_ms=200,
+        tapering_steps=10,
+        tapering_decay_factor=2.0,
+        taper_after_word_boundary=False,
+    )
+
+    # Measure memory before processing
+    process = psutil.Process()
+    initial_memory = process.memory_info().rss
+
+    # Time the processing
+    start_time = time.time()
+    tapered_frames = []
+    async for frame in taper_audio_frame(audio_frame, params):
+        tapered_frames.append(frame)
+    end_time = time.time()
+
+    # Calculate metrics
+    processing_time = end_time - start_time
+    final_memory = process.memory_info().rss
+    memory_used = final_memory - initial_memory
+    bytes_per_second = len(audio_bytes) / processing_time
+
+    # Log performance metrics
+    print(f"\nLarge Frame Performance:")
+    print(f"Processing time: {processing_time:.4f} seconds")
+    print(f"Memory used: {memory_used / 1024:.2f} KB")
+    print(f"Processing speed: {bytes_per_second / 1024:.2f} KB/s")
+
+    # Assert performance requirements
+    assert processing_time < 1.0  # Should process in less than 1 second
+    assert memory_used < 5 * 1024 * 1024  # Should use less than 5MB of memory
+    assert bytes_per_second > 100 * 1024  # Should process at least 100KB/s
