@@ -128,6 +128,10 @@ async def main():
                 vad_enabled=True,
                 vad_audio_passthrough=True,
                 vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
+                tapering_period_ms=200,  # 200ms tapering period
+                tapering_steps=8,  # 8 steps of tapering
+                tapering_decay_factor=2.0,  # Max reduction - e^(-2.0) = 0.135
+                taper_after_word_boundary=False,  # Start tapering immediately
             ),
         )
 
