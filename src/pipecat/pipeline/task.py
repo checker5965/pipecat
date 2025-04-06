@@ -225,7 +225,7 @@ class PipelineTask(BaseTask):
         self._sink = PipelineTaskSink(self._down_queue)
         pipeline.link(self._sink)
 
-        # This task maneger will handle all the asyncio tasks created by this
+        # This task manager will handle all the asyncio tasks created by this
         # PipelineTask and its frame processors.
         self._task_manager = task_manager or TaskManager()
 
