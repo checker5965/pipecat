@@ -4,11 +4,18 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
+"""Base output transport module for Pipecat.
+
+This module provides the base class for implementing output transport mechanisms
+in Pipecat. It defines the core functionality for handling audio and video output
+frames, including frame processing, message handling, and device management.
+"""
+
 import asyncio
 import itertools
 import sys
 import time
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator, List, Optional
 
 from loguru import logger
 from PIL import Image
@@ -35,13 +42,32 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_transport import TransportParams
+from pipecat.utils.audio_utils import taper_audio_frame
 from pipecat.utils.time import nanoseconds_to_seconds
 
 BOT_VAD_STOP_SECS = 0.3
 
 
 class BaseOutputTransport(FrameProcessor):
+    """Base class for output transport implementations.
+
+    This class provides the core functionality for handling output frames,
+    including audio and video processing, message handling, and device management.
+    Concrete transport implementations should inherit from this class and
+    implement the abstract methods.
+
+    Attributes:
+        params: Transport-specific parameters
+        _sample_rate: Current audio sample rate
+    """
+
     def __init__(self, params: TransportParams, **kwargs):
+        """Initialize the base output transport.
+
+        Args:
+            params: Transport-specific parameters
+            **kwargs: Additional arguments passed to the parent class
+        """
         super().__init__(**kwargs)
 
         self._params = params
@@ -72,11 +98,26 @@ class BaseOutputTransport(FrameProcessor):
         # Indicates if the bot is currently speaking.
         self._bot_speaking = False
 
+        self._last_audio_frame: Optional[OutputAudioRawFrame] = None
+
     @property
     def sample_rate(self) -> int:
+        """Get the current audio sample rate.
+
+        Returns:
+            int: The current audio sample rate
+        """
         return self._sample_rate
 
     async def start(self, frame: StartFrame):
+        """Start the output transport.
+
+        This method initializes the transport with the provided start frame,
+        setting up the sample rate and creating necessary sink tasks.
+
+        Args:
+            frame: The start frame containing initialization parameters
+        """
         self._sample_rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
 
         # We will write 10ms*CHUNKS of audio at a time (where CHUNKS is the
@@ -92,6 +133,14 @@ class BaseOutputTransport(FrameProcessor):
         self._create_sink_tasks()
 
     async def stop(self, frame: EndFrame):
+        """Stop the output transport.
+
+        This method gracefully stops the transport, allowing sink tasks to
+        process remaining frames before shutting down.
+
+        Args:
+            frame: The end frame signaling transport shutdown
+        """
         # Let the sink tasks process the queue until they reach this EndFrame.
         await self._sink_clock_queue.put((sys.maxsize, frame.id, frame))
         await self._sink_queue.put(frame)
@@ -109,24 +158,72 @@ class BaseOutputTransport(FrameProcessor):
         await self._cancel_camera_task()
 
     async def cancel(self, frame: CancelFrame):
+        """Cancel the output transport.
+
+        This method immediately cancels all transport operations,
+        including sink tasks and camera tasks.
+
+        Args:
+            frame: The cancel frame signaling immediate shutdown
+        """
         # Since we are cancelling everything it doesn't matter if we cancel sink
         # tasks first or not.
         await self._cancel_sink_tasks()
         await self._cancel_camera_task()
 
     async def send_message(self, frame: TransportMessageFrame | TransportMessageUrgentFrame):
+        """Send a transport message.
+
+        This method handles transport-specific messages. The base implementation
+        does nothing, but concrete implementations should override this method.
+
+        Args:
+            frame: The message frame to send
+        """
         pass
 
     async def write_frame_to_camera(self, frame: OutputImageRawFrame):
+        """Write a frame to the camera output.
+
+        This method handles writing image frames to the camera output.
+        The base implementation does nothing, but concrete implementations
+        should override this method.
+
+        Args:
+            frame: The image frame to write
+        """
         pass
 
     async def write_raw_audio_frames(self, frames: bytes):
+        """Write raw audio frames to the output.
+
+        This method handles writing raw audio data to the output.
+        The base implementation does nothing, but concrete implementations
+        should override this method.
+
+        Args:
+            frames: The raw audio data to write
+        """
         pass
 
     async def send_audio(self, frame: OutputAudioRawFrame):
+        """Send an audio frame to the output.
+
+        This method queues an audio frame for processing by the output transport.
+
+        Args:
+            frame: The audio frame to send
+        """
         await self.queue_frame(frame, FrameDirection.DOWNSTREAM)
 
     async def send_image(self, frame: OutputImageRawFrame | SpriteFrame):
+        """Send an image frame to the output.
+
+        This method queues an image frame for processing by the output transport.
+
+        Args:
+            frame: The image frame to send
+        """
         await self.queue_frame(frame, FrameDirection.DOWNSTREAM)
 
     #
@@ -134,6 +231,15 @@ class BaseOutputTransport(FrameProcessor):
     #
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Process a frame in the specified direction.
+
+        This method handles frame processing, delegating to the appropriate
+        handler based on the frame type.
+
+        Args:
+            frame: The frame to process
+            direction: The direction of frame processing
+        """
         await super().process_frame(frame, direction)
 
         #
@@ -181,6 +287,15 @@ class BaseOutputTransport(FrameProcessor):
             return
 
         if isinstance(frame, StartInterruptionFrame):
+            # Only taper if bot is currently speaking
+            if (
+                self._bot_speaking
+                and self._last_audio_frame
+                and self._params.tapering_period_ms > 0
+            ):
+                await self._taper_audio(self._last_audio_frame)
+
+            # Continue with normal interruption handling
             # Cancel sink and camera tasks.
             await self._cancel_sink_tasks()
             await self._cancel_camera_task()
@@ -193,7 +308,7 @@ class BaseOutputTransport(FrameProcessor):
     async def _handle_audio(self, frame: OutputAudioRawFrame):
         if not self._params.audio_out_enabled:
             return
-
+        self._last_audio_frame = frame  # Track the last audio frame
         # We might need to resample if incoming audio doesn't match the
         # transport sample rate.
         resampled = await self._resampler.resample(
@@ -441,3 +556,14 @@ class BaseOutputTransport(FrameProcessor):
         await self._draw_image(image)
 
         self._camera_out_queue.task_done()
+
+    async def _taper_audio(self, frame: OutputAudioRawFrame):
+        """Taper off the last audio frame when user interruption occurs."""
+        if not self._params.tapering_period_ms or not frame:
+            return
+
+        logger.debug(
+            f"Pushing tapered frames: {self._params.tapering_period_ms}ms, {self._params.tapering_steps} steps, {self._params.tapering_decay_factor} decay"
+        )
+        async for tapered_frame in taper_audio_frame(frame, self._params):
+            await self._sink_queue.put(tapered_frame)
