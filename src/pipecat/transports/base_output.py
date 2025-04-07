@@ -293,7 +293,17 @@ class BaseOutputTransport(FrameProcessor):
                 and self._last_audio_frame
                 and self._params.tapering_period_ms > 0
             ):
+                # Cancel existing sink tasks
+                await self._cancel_sink_tasks()
+
+                # Create new sink tasks to process tapered frames
+                self._create_sink_tasks()
+
+                # Queue tapered frames
                 await self._taper_audio(self._last_audio_frame)
+
+                # Wait for tapered frames to be processed
+                await asyncio.sleep(self._params.tapering_period_ms / 1000.0)
 
             # Continue with normal interruption handling
             # Cancel sink and camera tasks.

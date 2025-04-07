@@ -189,7 +189,6 @@ async def taper_audio_frame(
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
-        await asyncio.sleep(word_boundary / sample_rate)
 
     # Then taper the remaining audio
     if word_boundary is not None and word_boundary > 0:
@@ -202,7 +201,6 @@ async def taper_audio_frame(
         return
 
     total_steps = params.tapering_steps
-    step_duration_ms = params.tapering_period_ms / total_steps
     samples_per_step = len(remaining_audio) // total_steps
 
     for step in range(total_steps):
@@ -225,6 +223,3 @@ async def taper_audio_frame(
         yield OutputAudioRawFrame(
             audio=chunk.tobytes(), sample_rate=sample_rate, num_channels=num_channels
         )
-
-        # Ok, we've output the chunk, now wait for the next step
-        await asyncio.sleep(step_duration_ms / 1000.0)
